@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Order of Operations Game (P5)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f6f6f6;
+    }
+    .container {
+      max-width: 700px;
+      margin: auto;
+      background: white;
+      padding: 20px;
+      border-radius: 16px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.15);
+      text-align: center;
+    }
+    .btn {
+      padding: 10px 20px;
+      margin: 8px;
+      border: none;
+      border-radius: 6px;
+      background: #007bff;
+      color: white;
+      cursor: pointer;
+      font-size: 15px;
+    }
+    .btn:hover { background: #0056c7; }
+    .answer-btn {
+      display: block;
+      width: 100%;
+      margin: 8px 0;
+      padding: 12px;
+      font-size: 18px;
+    }
+    .correct { background: #4caf50 !important; }
+    .wrong { background: #d9534f !important; }
+    #reward { font-size: 18px; color: #ff9800; font-weight: bold; min-height: 24px; }
+    #streakBarContainer {
+      width: 100%;
+      background: #ddd;
+      height: 20px;
+      border-radius: 12px;
+      margin-top: 5px;
+      overflow: hidden;
+    }
+    #streakBar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #ffea00, #ff9800);
+      border-radius: 12px;
+      transition: width 0.3s ease;
+    }
+    #powerups { margin-top: 10px; }
+    .powerup {
+      background: #ff4081;
+      color: white;
+      padding: 8px 14px;
+      margin: 5px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-block;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    .powerup.disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 6px;
+      text-align: center;
+    }
+    th { background: #f0f0f0; }
+    #historyEmpty { font-size: 14px; color: #777; }
+  </style>
+</head>
+<body>
+
+<!-- START SCREEN -->
+<div class="container" id="startScreen">
+  <h2>Order of Operations Game</h2>
+  <p>Enter your name to start. This device keeps a history of all attempts.</p>
+  <input type="text" id="playerName" placeholder="Enter your name" style="padding:8px; width:60%; max-width:260px;">
+  <br>
+  <button class="btn" onclick="startGame()">Start Game</button>
+  <h3>Past Attempts (This Device)</h3>
+  <div id="historyContainer">
+    <p id="historyEmpty">No attempts yet. Play a round to see scores here.</p>
+    <table id="historyTable" style="display:none;">
+      <thead>
+        <tr>
+          <th>#</th><th>Name</th><th>Score</th><th>Level</th><th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- GAME SCREEN -->
+<div class="container" id="gameContainer" style="display:none;">
+  <h2>Order of Operations Game</h2>
+  <p>Player: <span id="currentPlayerLabel"></span></p>
+  <p>Time Left: <span id="timer">60</span>s</p>
+  <p>Level: <span id="level">1</span> | Score: <span id="score">0</span> | Streak: <span id="streak">0</span></p>
+  <div id="streakBarContainer"><div id="streakBar"></div></div>
+  <div id="reward"></div>
+  <div id="powerups"></div>
+  <hr>
+  <p>Solve:</p>
+  <div id="expression" style="font-size: 32px; margin: 20px;"></div>
+  <div id="answers"></div>
+  <p id="feedback" style="font-size: 18px; font-weight: bold;"></p>
+  <button class="btn" onclick="backToStart()">Back to Start</button>
+</div>
+
+<!-- END SCREEN -->
+<div class="container" id="endScreen" style="display:none;">
+  <h2>Round Over</h2>
+  <p>Player: <span id="finalPlayer"></span></p>
+  <p>Final Score: <span id="finalScore"></span></p>
+  <p>Level Reached: <span id="finalLevel"></span></p>
+  <button class="btn" onclick="playAgainSamePlayer()">Play Again (Same Player)</button>
+  <button class="btn" onclick="backToStart()">Back to Start</button>
+</div>
+
+<script>
+// ===== GLOBAL STATE =====
+let score = 0;
+let streak = 0;
+let level = 1;
+let timeLeft = 300;
+let timerInterval = null;
+let doublePoints = false;
+let freezeTime = false;
+let currentPlayer = "";
+let currentCorrect = 0;
+let powerupsShown = false;
+let wrongQuestions = [];
+const STORAGE_KEY = "oo_game_attempts_v2";
+const SHEET_URL = "YOUR_GOOGLE_SCRIPT_URL_HERE"; // replace with your Apps Script Web App URL
+
+// sounds
+const correctSound = new Audio("https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg");
+const wrongSound = new Audio("https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg");
+const levelUpSound = new Audio("https://actions.google.com/sounds/v1/cartoon/metal_beam_twank.ogg");
+const powerupSound = new Audio("https://actions.google.com/sounds/v1/cartoon/pop.ogg");
+
+// ===== UTILS =====
+function r(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function applyOp(x, op, y) {
+  if (op === "+") return x + y;
+  if (op === "-") return x - y;
+  if (op === "×") return x * y;
+  if (op === "÷") { if(y===0) return null; if(x%y!==0) return null; return x/y; }
+  return null;
+}
+
+// ===== EXPRESSION GENERATOR =====
+function generateExpression() {
+  const ops = ["+", "-", "×", "÷"];
+  let min = Math.max(1, level * 2);
+  let max = level * 10 + 5;
+  while(true) {
+    let a=r(min,max), b=r(min,max), c=r(min,max);
+    let op1=ops[r(0,ops.length-1)], op2=ops[r(0,ops.length-1)];
+    let struct=r(1,2), expr, first, second, result;
+    if(struct===1){
+      first=applyOp(a,op1,b); if(first===null||first<0) continue;
+      result=applyOp(first,op2,c); if(result===null||result<0) continue;
+      expr=`(${a} ${op1} ${b}) ${op2} ${c}`;
+    } else {
+      second=applyOp(b,op2,c); if(second===null||second<0) continue;
+      result=applyOp(a,op1,second); if(result===null||result<0) continue;
+      expr=`${a} ${op1} (${b} ${op2} ${c})`;
+    }
+    return { expr, result };
+  }
+}
+
+// ===== GAME FLOW =====
+function newQuestion() {
+  const q = generateExpression();
+  currentCorrect = q.result;
+  document.getElementById("expression").textContent = q.expr;
+  document.getElementById("feedback").textContent = "";
+  document.getElementById("reward").textContent = "";
+  let answers=[currentCorrect];
+  while(answers.length<4){
+    let wrong=currentCorrect+r(-12,12);
+    if(wrong>=0 && wrong!==currentCorrect && Number.isInteger(wrong)) answers.push(wrong);
+  }
+  answers.sort(()=>Math.random()-0.5);
+  const div = document.getElementById("answers");
+  div.innerHTML="";
+  answers.forEach(ans=>{
+    const btn=document.createElement("button");
+    btn.className="btn answer-btn";
+    btn.textContent=ans;
+    btn.onclick = ()=>checkAnswer(btn, ans, currentCorrect, q.expr);
+    div.appendChild(btn);
+  });
+}
+
+function updateStreakBar() {
+  document.getElementById("streakBar").style.width=Math.min(streak*10,100)+"%";
+}
+
+function checkAnswer(btn, choice, correct, expression){
+  if(choice===correct){
+    correctSound.play();
+    let points = doublePoints?2:1;
+    score+=points;
+    streak++;
+    document.getElementById("feedback").textContent="Correct!";
+    handleStreakRewards();
+  } else {
+    wrongSound.play();
+    streak=0;
+    document.getElementById("feedback").textContent="Wrong.";
+    wrongQuestions.push({expression: expression, studentAnswer: choice, correctAnswer: correct});
+  }
+  document.getElementById("score").textContent=score;
+  document.getElementById("streak").textContent=streak;
+  updateStreakBar();
+  setTimeout(newQuestion,350);
+}
+
+function handleStreakRewards() {
+  let msg="";
+  if(streak===3) msg="🔥 Nice streak!";
+  if(streak===5) msg="⚡ Combo Master!";
+  if(streak===8) msg="🌟 On Fire!";
+  if(streak===10) msg="🏆 Legend Mode!";
+  if(msg) document.getElementById("reward").textContent=msg;
+  if(streak>0 && streak%5===0){
+    level++;
+    document.getElementById("level").textContent=level;
+    levelUpSound.play();
+  }
+}
+
+// ===== TIMER & POWERUPS =====
+function startTimer(){
+  clearInterval(timerInterval);
+  timeLeft=300;
+  document.getElementById("timer").textContent=timeLeft;
+  powerupsShown=false;
+  document.getElementById("powerups").innerHTML="";
+  timerInterval=setInterval(()=>{
+    if(!freezeTime) timeLeft--;
+    document.getElementById("timer").textContent=timeLeft;
+    if(timeLeft===30 && !powerupsShown){
+      powerupsShown=true;
+      showPowerUps();
+    }
+    if(timeLeft<=0) endRound();
+  },1000);
+}
+
+function showPowerUps(){
+  const div=document.getElementById("powerups");
+  div.innerHTML=`
+    <div class="powerup" id="puFreeze" onclick="activateFreeze()">❄ Freeze Time</div>
+    <div class="powerup" id="puDouble" onclick="activateDouble()">✨ Double Points</div>
+    <div class="powerup" id="puHint" onclick="activateHint()">💡 Auto Hint</div>
+  `;
+}
+
+function disablePowerup(id){
+  const el=document.getElementById(id);
+  if(el){ el.classList.add("disabled"); el.onclick=null; }
+}
+
+function activateFreeze(){
+  if(freezeTime) return;
+  freezeTime=true;
+  powerupSound.play();
+  document.getElementById("reward").textContent="❄ Time Frozen for 7s!";
+  disablePowerup("puFreeze");
+  setTimeout(()=>{ freezeTime=false; },7000);
+}
+
+function activateDouble(){
+  if(doublePoints) return;
+  doublePoints=true;
+  powerupSound.play();
+  document.getElementById("reward").textContent="✨ Double Points for 10s!";
+  disablePowerup("puDouble");
+  setTimeout(()=>{ doublePoints=false; },10000);
+}
+
+function activateHint(){
+  powerupSound.play();
+  document.getElementById("reward").textContent="💡 Hint: "+currentCorrect;
+  disablePowerup("puHint");
+}
+
+// ===== START / END / HISTORY =====
+function startGame(){
+  const nameInput=document.getElementById("playerName");
+  const name=nameInput.value.trim();
+  if(!name){ alert("Please enter a name first."); return; }
+  currentPlayer=name;
+  score=0; streak=0; level=1; freezeTime=false; doublePoints=false; wrongQuestions=[];
+  document.getElementById("score").textContent=score;
+  document.getElementById("streak").textContent=streak;
+  document.getElementById("level").textContent=level;
+  document.getElementById("streakBar").style.width="0%";
+  document.getElementById("reward").textContent="";
+  document.getElementById("feedback").textContent="";
+  document.getElementById("powerups").innerHTML="";
+  document.getElementById("currentPlayerLabel").textContent=currentPlayer;
+  document.getElementById("startScreen").style.display="none";
+  document.getElementById("endScreen").style.display="none";
+  document.getElementById("gameContainer").style.display="block";
+  startTimer();
+  newQuestion();
+}
+
+function playAgainSamePlayer(){
+  if(!currentPlayer){ backToStart(); return; }
+  startGame();
+}
+
+function backToStart(){
+  clearInterval(timerInterval);
+  document.getElementById("gameContainer").style.display="none";
+  document.getElementById("endScreen").style.display="none";
+  document.getElementById("startScreen").style.display="block";
+  loadHistory();
+}
+
+// ===== SAVE ATTEMPT =====
+function saveAttempt(name, score, levelReached){
+  // save to Google Sheets
+  const data={
+    name,
+    score,
+    level: levelReached,
+    wrongQuestions: JSON.stringify(wrongQuestions)
+  };
+  fetch(SHEET_URL,{
+    method:"POST",
+    body: JSON.stringify(data)
+  })
+  .then(res=>res.json())
+  .then(resp=>{
+    if(resp.result==="success") console.log("Score saved to Google Sheets!");
+    else console.error("Error:", resp.message);
+  })
+  .catch(err=>console.error("Fetch error:", err));
+
+  // also save locally
+  let raw=localStorage.getItem(STORAGE_KEY);
+  let arr=[];
+  if(raw){ try{ arr=JSON.parse(raw); }catch(e){ arr=[]; } }
+  arr.push({name, score, level: levelReached, time: new Date().toLocaleString()});
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(arr));
+}
+
+// ===== LOAD HISTORY =====
+function loadHistory(){
+  let raw=localStorage.getItem(STORAGE_KEY);
+  let arr=[];
+  if(raw){ try{ arr=JSON.parse(raw); }catch(e){ arr=[]; } }
+  const table=document.getElementById("historyTable");
+  const body=document.getElementById("historyBody");
+  const emptyMsg=document.getElementById("historyEmpty");
+  if(!arr.length){ table.style.display="none"; emptyMsg.style.display="block"; body.innerHTML=""; return; }
+  arr=arr.slice().reverse();
+  emptyMsg.style.display="none"; table.style.display="table"; body.innerHTML="";
+  arr.forEach((item,index)=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${index+1}</td><td>${item.name}</td><td>${item.score}</td><td>${item.level}</td><td>${item.time}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+// ===== END ROUND =====
+function endRound(){
+  clearInterval(timerInterval);
+  if(currentPlayer) saveAttempt(currentPlayer, score, level);
+  document.getElementById("finalPlayer").textContent=currentPlayer||"-";
+  document.getElementById("finalScore").textContent=score;
+  document.getElementById("finalLevel").textContent=level;
+  document.getElementById("gameContainer").style.display="none";
+  document.getElementById("endScreen").style.display="block";
+  loadHistory();
+}
+
+// ===== INIT =====
+window.onload=function(){ loadHistory(); };
+</script>
+</body>
+</html>
